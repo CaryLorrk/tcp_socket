@@ -316,7 +316,7 @@ void Comm::read_msg(FileDesc sockfd, size_t msg_size) {
 
         }
     } while((size_t)numbytes < msg_size);
-    std::async(std::launch::async, &Comm::dispatch, this, host, std::move(msgbytes));
+    auto dummy = std::async(std::launch::async, &Comm::dispatch, this, host, std::move(msgbytes));
     //std::thread(&Comm::dispatch, this, host, std::move(msgbytes)).detach();
 }
 static Bytes serialize(Comm::Command cmd, const Bytes& bytes) {

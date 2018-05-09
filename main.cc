@@ -2,7 +2,7 @@
 
 #include "comm.h"
 
-#define BYTESIZE 10000
+#define BYTESIZE 1
 #define CNT 1000
 
 using namespace std::chrono_literals; 
