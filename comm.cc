@@ -369,5 +369,6 @@ void Comm::Sync(int cnt) {
         cmd_cv_[host].wait(lock, [this, host, cnt]() {
             return cmd_cnt_[host] >= cnt;
         });
+        cmd_cnt_[host] = 0;
     }
 }
