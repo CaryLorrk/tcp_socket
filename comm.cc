@@ -355,7 +355,6 @@ void Comm::Cmd(Hostid host, Bytes bytes) {
 }
 
 void Comm::cmd_handler(Hostid host, Bytes& bytes) {
-	std::this_thread::sleep_for(1ms);
     {
         std::lock_guard<std::mutex> lock(cmd_mu_[host]);
         cmd_cnt_[host]++;
