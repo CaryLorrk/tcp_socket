@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <cstring>
+#include <future>
 
 #include <unistd.h>
 #include <sys/types.h>
@@ -315,7 +316,8 @@ void Comm::read_msg(FileDesc sockfd, size_t msg_size) {
 
         }
     } while((size_t)numbytes < msg_size);
-    std::thread(&Comm::dispatch, this, host, std::move(msgbytes)).detach();
+    std::async(std::launch::async, &Comm::dispatch, this, host, std::move(msgbytes));
+    //std::thread(&Comm::dispatch, this, host, std::move(msgbytes)).detach();
 }
 static Bytes serialize(Comm::Command cmd, const Bytes& bytes) {
     Bytes msgbytes(sizeof(MsgSize) + sizeof(Comm::Command) + bytes.size(), 0);
