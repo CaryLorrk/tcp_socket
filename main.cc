@@ -1,17 +1,23 @@
 #include <iostream>
 
-#include "comm.h"
 
-#define BYTESIZE 1
-#define CNT 1000
+#ifdef GRPC
+#include "grpc/comm.h"
+#else
+#include "socket/comm.h"
+#endif
+
+#define BYTESIZE 1000
+#define CNT 100000
 
 using namespace std::chrono_literals; 
 int main(int argc, char *argv[])
 {
     if (argc < 3) {
-        std::cout << "usage: main this_host_id hosts..." << std::endl;
+        std::cout << "usage: " << argv[0] << " this_host_id hosts..." << std::endl;
         exit(1);
     }
+    std::cout << "Byte Size: " << BYTESIZE << " CNT: " << CNT << std::endl;
     int this_host = atoi(argv[1]);
     char **hosts = &argv[2];
     int numhosts = argc - 2;
@@ -27,6 +33,7 @@ int main(int argc, char *argv[])
         comm.Sync(CNT);
         std::cout << "end of iteration " << i << std::endl;
     }
+    comm.Finish();
     
     return 0;
 }

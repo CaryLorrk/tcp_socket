@@ -1,0 +1,24 @@
+syntax = "proto3";
+package rpc;
+
+service Comm {
+    rpc CheckAlive(CheckAliveRequest) returns (CheckAliveResponse) {}
+    rpc Cmd(stream CmdRequest) returns (stream CmdResponse) {}
+    rpc Finish(FinishRequest) returns (FinishResponse) {}
+}
+
+message CheckAliveRequest {}
+
+message CheckAliveResponse {
+    bool status = 1; 
+}
+
+message CmdRequest {
+    bytes data = 1;
+}
+
+message CmdResponse {}
+
+message FinishRequest {}
+
+message FinishResponse {}

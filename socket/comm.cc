@@ -10,6 +10,8 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 
+#include "serialize.h"
+
 static void *get_in_addr(struct sockaddr *sa);
 
 using namespace std::chrono_literals; 
@@ -167,9 +169,8 @@ FileDesc Comm::bind_for_connections() {
         exit(1);
     }
 
-    FileDesc sockfd;
-    addrinfo *p;
-    for(p = serverinfo; p != NULL; p = p->ai_next) {
+    FileDesc sockfd = -1;
+    for(addrinfo *p = serverinfo; p != NULL; p = p->ai_next) {
         if ((sockfd = socket(p->ai_family, p->ai_socktype,
                 p->ai_protocol)) == -1) {
             perror("socket");
@@ -190,7 +191,7 @@ FileDesc Comm::bind_for_connections() {
         break;
     }
 
-    if (p == NULL)  {
+    if (sockfd == -1)  {
         std::cout << "failed to bind" << std::endl;
         exit(1);
     }
@@ -212,8 +213,9 @@ void Comm::sender_func() {
         {
             std::unique_lock<std::mutex> lock(sender_mu_);
             sender_cv_.wait(lock, [this] {
-                    return !sender_queue_.empty();
+                    return sender_end_ || !sender_queue_.empty();
             });
+            if (sender_end_ && sender_queue_.empty()) return;
             data = std::move(sender_queue_.front());
             sender_queue_.pop();
         }
@@ -234,6 +236,14 @@ void Comm::send_message(Hostid host, Bytes&& msgbytes) {
     {
         std::lock_guard<std::mutex> lock(sender_mu_);
         sender_queue_.emplace(host, std::move(msgbytes));
+    }
+    sender_cv_.notify_one();
+}
+
+void Comm::send_finish() {
+    {
+        std::lock_guard<std::mutex> lock(sender_mu_);
+        sender_end_ = true;
     }
     sender_cv_.notify_one();
 }
@@ -260,7 +270,10 @@ void Comm::receiver_func() {
         for (int n = 0; n < nfds; ++n) {
             FileDesc sockfd = avail_events[n].data.fd;
             size_t msg_size = read_msg_size(sockfd);
-            read_msg(sockfd, msg_size);
+            if (read_msg(sockfd, msg_size) == Command::FINISH &&
+                    finish_cnt_ >= hosts_.size() - 2) {
+                return;
+            }
         }
     }
 }
@@ -299,7 +312,7 @@ size_t Comm::read_msg_size(FileDesc sockfd) {
     return *(MsgSize*)&buffer;
 }
 
-void Comm::read_msg(FileDesc sockfd, size_t msg_size) {
+Comm::Command Comm::read_msg(FileDesc sockfd, size_t msg_size) {
     Hostid host = sockfd_to_host_[sockfd];
     Bytes msgbytes(msg_size, 0);
     
@@ -312,35 +325,21 @@ void Comm::read_msg(FileDesc sockfd, size_t msg_size) {
 
         } else if (numbytes == 0) {
             std::cout << hosts_[ host ] << " disconncted" << std::endl;
-            exit(0);
-
         }
     } while((size_t)numbytes < msg_size);
+    Command cmd = deserialize_cmd(msgbytes);
     auto dummy = std::async(std::launch::async, &Comm::dispatch, this, host, std::move(msgbytes));
-    //std::thread(&Comm::dispatch, this, host, std::move(msgbytes)).detach();
-}
-static Bytes serialize(Comm::Command cmd, const Bytes& bytes) {
-    Bytes msgbytes(sizeof(MsgSize) + sizeof(Comm::Command) + bytes.size(), 0);
-    MsgSize msg_size = msgbytes.size();
-    std::copy((Byte*)&msg_size, (Byte*)(&msg_size + 1), msgbytes.begin());
-    std::copy((Byte*)&cmd, (Byte*)(&cmd + 1), msgbytes.begin() + sizeof(MsgSize));
-    std::copy(bytes.begin(), bytes.end(),
-            msgbytes.begin() + sizeof(MsgSize) + sizeof(Comm::Command));
-    return msgbytes;
-}
-
-static void deserialize(const Bytes& msgbytes, Comm::Command& cmd, Bytes& bytes) {
-    cmd = *reinterpret_cast<const Comm::Command*>(&msgbytes[sizeof(MsgSize)]);
-    bytes.append(msgbytes.begin() + sizeof(MsgSize) + sizeof(Comm::Command), msgbytes.end());
+    return cmd;
 }
 
 void Comm::dispatch(Hostid host, Bytes msgbytes) {
-    Command cmd;
-    Bytes bytes;
-    deserialize(msgbytes, cmd, bytes);
+    Command cmd = deserialize_cmd(msgbytes);
     switch(cmd) {
     case Command::CMD:
-        cmd_handler(host, bytes);
+        cmd_handler(host, msgbytes);
+        break;
+    case Command::FINISH:
+        finish_handler();
         break;
     default:
         std::cout << "Unknown command." << std::endl;
@@ -356,12 +355,38 @@ void Comm::Cmd(Hostid host, Bytes bytes) {
     send_message(host, serialize(Command::CMD, bytes));
 }
 
-void Comm::cmd_handler(Hostid host, Bytes& bytes) {
+void Comm::cmd_handler(Hostid host, [[gnu::unused]] Bytes& bytes) {
     {
         std::lock_guard<std::mutex> lock(cmd_mu_[host]);
         cmd_cnt_[host]++;
     }
     cmd_cv_[host].notify_all();
+}
+
+
+void Comm::Finish() {
+    send_finish();
+    for (Hostid host = 0; host < hosts_.size(); ++host) {
+        if (host != this_host_) {
+            send_message(host, serialize(Command::FINISH));
+        }
+    }
+
+    std::unique_lock<std::mutex> lock(finish_mu_);
+    finish_cv_.wait(lock, [this]() {
+        return finish_cnt_ >= hosts_.size() - 1;
+    });
+    sender_thread.join();
+    receiver_thread.join();
+}
+
+void Comm::finish_handler() {
+    {
+        std::unique_lock<std::mutex> lock(finish_mu_);
+        finish_cnt_++;
+    }
+    finish_cv_.notify_one();
+
 }
 
 void Comm::Sync(int cnt) {
