@@ -12,6 +12,8 @@
 using namespace std::chrono_literals; 
 int main(int argc, char *argv[])
 {
+    
+    std::cout << "the build is compiled at " << __DATE__ << " " << __TIME__ << std::endl;
     if (argc < 5) {
         std::cout << "usage: " << argv[0] << " bytesize cnt this_host_id hosts..." << std::endl;
         exit(1);
@@ -25,8 +27,11 @@ int main(int argc, char *argv[])
     Comm comm(this_host, hosts, numhosts);
     Bytes bytes(bytesize, 0);
     for (int i = 0; i < ITERATION; ++i) {
-        std::this_thread::sleep_for(600ms);
+        // dummy work
+        std::this_thread::sleep_for(3ms);
         for (int c = 0; c < cnt; ++c) {
+            // dummy work
+            std::this_thread::sleep_for(1us);
             for(int h = 0; h < numhosts; ++h) {
                 comm.Cmd(h, bytes);
             }

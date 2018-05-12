@@ -1,7 +1,8 @@
 all: socket.out grpc.out
 
 CXX = g++
-CXXFLAGS = -std=c++14 -Wall -Wextra -g -Og -fno-omit-frame-pointer -pthread
+DEBUGFLAGS = -g -Og -fno-omit-frame-pointer 
+CXXFLAGS = -std=c++14 -Wall -Wextra -O3 -pthread
 LDFLAGS := $(shell pkg-config --libs grpc++) \
 	$(shell pkg-config --libs protobuf)
 	

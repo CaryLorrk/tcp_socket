@@ -52,7 +52,7 @@ private:
     void receiver_func();
 	void set_host_events(FileDesc epollfd, std::vector<epoll_event>& host_events); 
     size_t read_msg_size(FileDesc sockfd);
-    Command read_msg(FileDesc sockfd, size_t msg_size);
+    Bytes read_msg(FileDesc sockfd, size_t msg_size);
     void dispatch(Hostid host, Bytes byts);
 
     // sender
@@ -70,17 +70,17 @@ private:
     std::mutex sender_mu_;
     std::condition_variable sender_cv_;
     std::queue<SendData> sender_queue_;
-    void send_finish();
+    void sender_finish();
     bool sender_end_ = false;
 
     // cmd
-    void cmd_handler(Hostid host, Bytes& bytes);
+    void cmd_handler(Hostid host, const Bytes& bytes);
     std::vector<int> cmd_cnt_;
     std::vector<std::mutex> cmd_mu_;
     std::vector<std::condition_variable> cmd_cv_;
 
     // finish
-    void finish_handler();
+    void finish_handler(Hostid host);
     unsigned finish_cnt_ = 0;
     std::mutex finish_mu_;
     std::condition_variable finish_cv_;

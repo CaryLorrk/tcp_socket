@@ -19,7 +19,7 @@ Comm::Comm(Hostid this_host, char* hosts[], int size):
         this_host_(this_host),
         hosts_(hosts, hosts + size),
         sockfds_(size),
-        cmd_cnt_(size),
+        cmd_cnt_(size), 
         cmd_mu_(size),
         cmd_cv_(size) {
     init_ip_to_host();
@@ -46,7 +46,7 @@ void Comm::init_ip_to_host() {
         if ((rv = getaddrinfo(hosts_[host].c_str(),
                         PORT, &hints, &hostinfo)) != 0) {
             std::cout << "getaddrinfo: " << gai_strerror(rv) << std::endl;
-            exit(1);
+            exit(EXIT_FAILURE);
         }
 
         for(p = hostinfo; p != NULL; p = p->ai_next) {
@@ -77,7 +77,7 @@ void Comm::accept_for_connections(FileDesc server_sockfd) {
                 (struct sockaddr *)&their_addr, &sin_size);
         if (client_sockfd == -1) {
             perror("accept");
-            exit(1);
+            exit(EXIT_FAILURE);
         }
 
         inet_ntop(their_addr.ss_family,
@@ -107,7 +107,7 @@ void Comm::client_for_connections() {
         if ((rv = getaddrinfo(hostname.c_str(),
                         PORT, &hints, &serverinfo)) != 0) {
             std::cout << "getaddrinfo: " << gai_strerror(rv) << std::endl;
-            exit(1);
+            exit(EXIT_FAILURE);
         }
 
         int yes=1;
@@ -121,7 +121,7 @@ void Comm::client_for_connections() {
                 if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
                         sizeof(int)) == -1) {
 					perror("setsockopt");
-					exit(1);
+					exit(EXIT_FAILURE);
 				}
 
                 if (connect(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
@@ -166,7 +166,7 @@ FileDesc Comm::bind_for_connections() {
     int rv;
     if ((rv = getaddrinfo(NULL, PORT, &hints, &serverinfo)) != 0) {
         std::cout << "getaddrinfo: " << gai_strerror(rv) << std::endl;
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     FileDesc sockfd = -1;
@@ -180,7 +180,7 @@ FileDesc Comm::bind_for_connections() {
         int yes = 1;
         if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
             perror("setsockopt");
-            exit(1);
+            exit(EXIT_FAILURE);
         }
 
         if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
@@ -193,7 +193,7 @@ FileDesc Comm::bind_for_connections() {
 
     if (sockfd == -1)  {
         std::cout << "failed to bind" << std::endl;
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     freeaddrinfo(serverinfo); // all done with this structure
@@ -203,7 +203,7 @@ FileDesc Comm::bind_for_connections() {
 void Comm::listen_for_connections(FileDesc server_sockfd) {
     if (listen(server_sockfd, hosts_.size()) == -1) {
         perror("listen");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -215,7 +215,13 @@ void Comm::sender_func() {
             sender_cv_.wait(lock, [this] {
                     return sender_end_ || !sender_queue_.empty();
             });
-            if (sender_end_ && sender_queue_.empty()) return;
+            if (sender_end_ && sender_queue_.empty()) {
+                for (auto sockfd: sockfds_) {
+                    close(sockfd);
+                }
+                std::cout << "sender finished" << std::endl;
+                return;
+            }
             data = std::move(sender_queue_.front());
             sender_queue_.pop();
         }
@@ -225,7 +231,7 @@ void Comm::sender_func() {
             numbytes += send(sockfds_[data.host], data.msgbytes.data() + numbytes, pkt_size - numbytes, 0);
             if (numbytes < 0) {
                 perror("send");
-                exit(1);
+                exit(EXIT_FAILURE);
             }
 
         } while((size_t)numbytes < pkt_size);
@@ -240,7 +246,7 @@ void Comm::send_message(Hostid host, Bytes&& msgbytes) {
     sender_cv_.notify_one();
 }
 
-void Comm::send_finish() {
+void Comm::sender_finish() {
     {
         std::lock_guard<std::mutex> lock(sender_mu_);
         sender_end_ = true;
@@ -252,7 +258,7 @@ void Comm::receiver_func() {
     FileDesc epollfd = epoll_create1(0);
     if (epollfd < 0) {
         perror("epoll_create1");
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     std::vector<epoll_event> host_events(hosts_.size());
@@ -264,14 +270,19 @@ void Comm::receiver_func() {
         int nfds = epoll_wait(epollfd, avail_events.data(), maxevent, -1);
         if (nfds < 0) {
             perror("epoll_wait");
-            exit(1);
+            exit(EXIT_FAILURE);
         }
 
         for (int n = 0; n < nfds; ++n) {
             FileDesc sockfd = avail_events[n].data.fd;
+            Hostid host = sockfd_to_host_[sockfd];
             size_t msg_size = read_msg_size(sockfd);
-            if (read_msg(sockfd, msg_size) == Command::FINISH &&
-                    finish_cnt_ >= hosts_.size() - 1) {
+            Bytes msgbytes = read_msg(sockfd, msg_size);
+            if (msg_size == 0 || msgbytes.size() == 0) continue;
+            Command cmd = deserialize_cmd(msgbytes);
+            auto dummy = std::async(std::launch::async, &Comm::dispatch, this, host, std::move(msgbytes));
+            if (cmd == Command::FINISH && finish_cnt_ >= hosts_.size() - 2) {
+                std::cout << "receiver finished" << std::endl;
                 return;
             }
         }
@@ -288,48 +299,42 @@ void Comm::set_host_events(FileDesc epollfd, std::vector<epoll_event>& host_even
         ev.events = EPOLLIN;
         if ((rv = epoll_ctl(epollfd, EPOLL_CTL_ADD, sockfd, &ev)) < 0) {
             perror("epoll_ctl");
-            exit(1);
+            exit(EXIT_FAILURE);
         }
     }
 }
 
 
 size_t Comm::read_msg_size(FileDesc sockfd) {
-    Byte buffer[sizeof(MsgSize)];
-    memset(buffer, '\0', sizeof(MsgSize));
+    MsgSize buffer = 0;
     int numbytes;
     do {
-        numbytes = recv(sockfd, buffer, sizeof(MsgSize), MSG_PEEK);
+        numbytes = recv(sockfd, &buffer, sizeof(MsgSize), MSG_PEEK);
         if (numbytes < 0) {
             perror("recv");
-            exit(1);
+            exit(EXIT_FAILURE);
 
         } else if (numbytes == 0) {
-            std::cout << hosts_[ sockfd_to_host_[sockfd] ] << " disconncted" << std::endl;
-            exit(0);
+            return 0;
         }
     } while(numbytes < 4);
-    return *(MsgSize*)&buffer;
+    return buffer;
 }
 
-Comm::Command Comm::read_msg(FileDesc sockfd, size_t msg_size) {
-    Hostid host = sockfd_to_host_[sockfd];
+Bytes Comm::read_msg(FileDesc sockfd, size_t msg_size) {
     Bytes msgbytes(msg_size, 0);
-    
     int numbytes = 0;
     do {
         numbytes += recv(sockfd, &msgbytes[0] + numbytes, msg_size - numbytes, 0);
         if(numbytes < 0){
             perror("recv");
-            exit(1);
+            exit(EXIT_FAILURE);
 
         } else if (numbytes == 0) {
-            std::cout << hosts_[ host ] << " disconncted" << std::endl;
+            return Bytes();
         }
     } while((size_t)numbytes < msg_size);
-    Command cmd = deserialize_cmd(msgbytes);
-    auto dummy = std::async(std::launch::async, &Comm::dispatch, this, host, std::move(msgbytes));
-    return cmd;
+    return msgbytes;
 }
 
 void Comm::dispatch(Hostid host, Bytes msgbytes) {
@@ -339,11 +344,11 @@ void Comm::dispatch(Hostid host, Bytes msgbytes) {
         cmd_handler(host, msgbytes);
         break;
     case Command::FINISH:
-        finish_handler();
+        finish_handler(host);
         break;
     default:
-        std::cout << "Unknown command." << std::endl;
-        exit(1);
+        std::cout << "Unknown command: " << std::endl;
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -355,7 +360,7 @@ void Comm::Cmd(Hostid host, Bytes bytes) {
     send_message(host, serialize(Command::CMD, bytes));
 }
 
-void Comm::cmd_handler(Hostid host, [[gnu::unused]] Bytes& bytes) {
+void Comm::cmd_handler(Hostid host, [[gnu::unused]] const Bytes& bytes) {
     {
         std::lock_guard<std::mutex> lock(cmd_mu_[host]);
         cmd_cnt_[host]++;
@@ -365,8 +370,6 @@ void Comm::cmd_handler(Hostid host, [[gnu::unused]] Bytes& bytes) {
 
 
 void Comm::Finish() {
-    send_finish();
-    finish_handler();
     for (Hostid host = 0; host < hosts_.size(); ++host) {
         if (host != this_host_) {
             send_message(host, serialize(Command::FINISH));
@@ -377,17 +380,18 @@ void Comm::Finish() {
     finish_cv_.wait(lock, [this]() {
         return finish_cnt_ >= hosts_.size() - 1;
     });
-    sender_thread.join();
     receiver_thread.join();
+    sender_finish();
+    sender_thread.join();
 }
 
-void Comm::finish_handler() {
+void Comm::finish_handler(Hostid host) {
+    std::cout << "receive finish from: " << host << std::endl;
     {
         std::unique_lock<std::mutex> lock(finish_mu_);
         finish_cnt_++;
     }
     finish_cv_.notify_one();
-
 }
 
 void Comm::Sync(int cnt) {
@@ -396,6 +400,6 @@ void Comm::Sync(int cnt) {
         cmd_cv_[host].wait(lock, [this, host, cnt]() {
             return cmd_cnt_[host] >= cnt;
         });
-        cmd_cnt_[host] = 0;
+        cmd_cnt_[host] -= cnt;
     }
 }
