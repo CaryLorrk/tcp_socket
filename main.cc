@@ -7,6 +7,8 @@
 #include "socket/comm.h"
 #endif
 
+#define ITERATION 10
+
 using namespace std::chrono_literals; 
 int main(int argc, char *argv[])
 {
@@ -22,7 +24,7 @@ int main(int argc, char *argv[])
     std::cout << "bytesize: " << bytesize << " cnt: " << cnt << std::endl;
     Comm comm(this_host, hosts, numhosts);
     Bytes bytes(bytesize, 0);
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < ITERATION; ++i) {
         std::this_thread::sleep_for(600ms);
         for (int c = 0; c < cnt; ++c) {
             for(int h = 0; h < numhosts; ++h) {

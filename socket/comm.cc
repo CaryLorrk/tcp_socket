@@ -271,7 +271,7 @@ void Comm::receiver_func() {
             FileDesc sockfd = avail_events[n].data.fd;
             size_t msg_size = read_msg_size(sockfd);
             if (read_msg(sockfd, msg_size) == Command::FINISH &&
-                    finish_cnt_ >= hosts_.size() - 2) {
+                    finish_cnt_ >= hosts_.size() - 1) {
                 return;
             }
         }
@@ -366,6 +366,7 @@ void Comm::cmd_handler(Hostid host, [[gnu::unused]] Bytes& bytes) {
 
 void Comm::Finish() {
     send_finish();
+    finish_handler();
     for (Hostid host = 0; host < hosts_.size(); ++host) {
         if (host != this_host_) {
             send_message(host, serialize(Command::FINISH));
